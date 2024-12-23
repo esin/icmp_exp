@@ -5,7 +5,7 @@
 *.so
 *.dylib
 
-ping_exp
+icmp_exp
 
 # Test binary, built with `go test -c`
 *.test

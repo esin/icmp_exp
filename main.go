@@ -80,7 +80,7 @@ func main() {
 
 		lock.Lock()
 		delay, exists := delays[addr.String()]
-		if !exists || delay == 1024*1000 {
+		if !exists || delay >= 1048576 {
 			delay = 1
 		}
 		delays[addr.String()] = delay * 2
