@@ -15,6 +15,7 @@ import (
 const (
 	icmpEchoReply   = 0
 	icmpEchoRequest = 8
+	maxDelay        = 1048576
 )
 
 type ICMPHeader struct {
@@ -38,6 +39,55 @@ func calculateChecksum(data []byte) uint16 {
 	return uint16(^sum)
 }
 
+func handleIP(conn net.PacketConn, addr net.Addr, packets <-chan []byte, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	var delay int = 1 // Начальная задержка
+
+	for buffer := range packets {
+		var icmpHeader ICMPHeader
+		reader := bytes.NewReader(buffer)
+		if err := binary.Read(reader, binary.BigEndian, &icmpHeader); err != nil {
+			log.Printf("icmp header err: %v", err)
+			continue
+		}
+
+		if icmpHeader.Type != icmpEchoRequest {
+			continue
+		}
+
+		log.Printf("Idle %d msec. IP: %s", delay, addr.String())
+		time.Sleep(time.Duration(delay) * time.Millisecond)
+
+		icmpHeader.Type = icmpEchoReply
+		icmpHeader.Checksum = 0
+		responseBuffer := new(bytes.Buffer)
+		if err := binary.Write(responseBuffer, binary.BigEndian, &icmpHeader); err != nil {
+			log.Printf("icmp header err: %v", err)
+			continue
+		}
+
+		responseBuffer.Write(buffer[8:])
+		data := responseBuffer.Bytes()
+
+		icmpHeader.Checksum = calculateChecksum(data)
+		binary.BigEndian.PutUint16(data[2:4], icmpHeader.Checksum)
+
+		_, err := conn.WriteTo(data, addr)
+		if err != nil {
+			log.Printf("icmp send err: %v", err)
+		} else {
+			log.Printf("icmp reply sent to %s", addr.String())
+		}
+
+		if delay >= maxDelay {
+			delay = 1
+		} else {
+			delay *= 2
+		}
+	}
+}
+
 func main() {
 	conn, err := net.ListenPacket("ip4:icmp", "0.0.0.0")
 	if err != nil {
@@ -51,14 +101,18 @@ func main() {
 	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-signalChan
+		log.Println("Shutting down...")
 		conn.Close()
 		os.Exit(0)
 	}()
 
 	buffer := make([]byte, 65536)
 
-	var lock sync.Mutex
-	delays := make(map[string]int)
+	var (
+		lock    sync.Mutex
+		wg      sync.WaitGroup
+		ipChans = make(map[string]chan []byte)
+	)
 
 	for {
 		n, addr, err := conn.ReadFrom(buffer)
@@ -67,47 +121,18 @@ func main() {
 			continue
 		}
 
-		var icmpHeader ICMPHeader
-		reader := bytes.NewReader(buffer[:n])
-		if err := binary.Read(reader, binary.BigEndian, &icmpHeader); err != nil {
-			log.Printf("icmp header err: %v", err)
-			continue
-		}
-
-		if icmpHeader.Type != icmpEchoRequest {
-			continue
-		}
-
 		lock.Lock()
-		delay, exists := delays[addr.String()]
-		if !exists || delay >= 1048576 {
-			delay = 1
+		ch, exists := ipChans[addr.String()]
+		if !exists {
+			ch = make(chan []byte, 100)
+			ipChans[addr.String()] = ch
+			wg.Add(1)
+			go handleIP(conn, addr, ch, &wg)
 		}
-		delays[addr.String()] = delay * 2
 		lock.Unlock()
 
-		log.Printf("Idle %d msec. IP: %s", delay, addr.String())
-		time.Sleep(time.Duration(delay) * time.Millisecond)
-
-		icmpHeader.Type = icmpEchoReply
-		icmpHeader.Checksum = 0
-		responseBuffer := new(bytes.Buffer)
-		if err := binary.Write(responseBuffer, binary.BigEndian, icmpHeader); err != nil {
-			log.Printf("icmp header err: %v", err)
-			continue
-		}
-
-		responseBuffer.Write(buffer[8:n])
-		data := responseBuffer.Bytes()
-
-		icmpHeader.Checksum = calculateChecksum(data)
-		binary.BigEndian.PutUint16(data[2:4], icmpHeader.Checksum)
-
-		_, err = conn.WriteTo(data, addr)
-		if err != nil {
-			log.Printf("icmp send err: %v", err)
-		} else {
-			log.Printf("icmp reply sent to %s", addr.String())
-		}
+		packet := make([]byte, n)
+		copy(packet, buffer[:n])
+		ch <- packet
 	}
 }
