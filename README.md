@@ -20,3 +20,13 @@ Run commands from root:
    ```
 4. Allow run binary from regular user:
    `setcap cap_net_raw+ep icmp_exp`
+
+#### Systemd part
+5. Put binary to `/usr/local/bin/`
+6. Create `/etc/systemd/system/icmp_exp.service`
+7. Put everything from [icmp_exp.service](icmp_exp.service)
+8. Change User/Group
+9. Reload:
+   `systemctl daemon-reload`
+10. Run and enable autostart:
+   `systemctl start icmp_exp; systemctl enable icmp_exp`

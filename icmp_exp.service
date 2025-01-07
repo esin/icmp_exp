@@ -1,0 +1,14 @@
+[Unit]
+Description=ICMP Exponent
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/icmp_exp
+User=changeme
+Group=changeme
+Restart=always
+AmbientCapabilities=CAP_NET_RAW
+
+[Install]
+WantedBy=multi-user.target
